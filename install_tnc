@@ -1,0 +1,81 @@
+#!/bin/bash
+install_trojan(){
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/trojan-gfw/trojan-quickstart/master/trojan-quickstart.sh)"
+  systemctl enable --now trojan
+}
+
+config_trojan(){
+  cp $TORJAN_CONF ${TORJAN_CONF}.bak
+
+  sed -i "s@\"password1\",@\"$TROJAN_PASSWORD\"@" $TORJAN_CONF
+  sed -i "/password2/d" $TORJAN_CONF
+  sed -i "s@/path/to/certificate.crt@${CERT_PATH}fullchain.pem@" $TORJAN_CONF
+  sed -i "s@/path/to/private.key@${CERT_PATH}privkey.pem@" $TORJAN_CONF
+  systemctl restart trojan
+}
+
+install_nginx(){
+  rpm -ivh http://nginx.org/packages/centos/7/noarch/RPMS/nginx-release-centos-7-0.el7.ngx.noarch.rpm
+  yum install -y nginx
+  systemctl enable  --now nginx
+}
+
+install_certbot(){
+  mv /etc/nginx/conf.d/default.conf  /etc/nginx/conf.d/default.conf.bak
+  echo "server {server_name ${DOMAIN}; }" > /etc/nginx/conf.d/${DOMAIN}.conf
+  yum install -y epel-release
+  yum install -y certbot-nginx
+  certbot --nginx -d $DOMAIN
+}
+
+config_nginx(){
+  echo "  server {
+    listen 127.0.0.1:80 default_server;
+    server_name ${DOMAIN};
+    location / {
+      proxy_pass ${PASSSITE};
+    }
+  }
+  server {
+    listen 127.0.0.1:80;
+    server_name $IP;
+    return 301 https://${DOMAIN}\$request_uri;
+  }
+
+  server {
+    listen 0.0.0.0:80;
+    server_name _;
+    return 301 https://\$host\$request_uri;
+  }" >$NGINX_CONF
+  systemctl restart nginx
+}
+
+print_random_string()
+{
+  # $1 = new tring length
+  date +%s | sha256sum | base64 |head -c $1;echo
+}
+
+init()
+{
+  read -p "Domain name: " DOMAIN
+  NGINX_CONF=/etc/nginx/conf.d/$DOMAIN.conf
+  IP=$(curl -s api.ipify.org)
+  PASSSITE=https://www.ietf.org
+  CERT_PATH=/etc/letsencrypt/live/$DOMAIN/
+  TORJAN_CONF="/usr/local/etc/trojan/config.json"
+  TROJAN_PASSWORD=$(print_random_string 20)
+}
+
+# === main ===
+echo ----------[ Install trojan + nginx + certbot ]
+init
+install_nginx
+install_certbot
+install_trojan
+
+config_nginx
+config_trojan
+
+echo ----------[ Done ]
+echo ----------[ Password: $TROJAN_PASSWORD]
